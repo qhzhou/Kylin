@@ -11,10 +11,15 @@ public final class MemoryChecker {
 
     private static final int MEMORY_THRESHOLD = 80 << 20;
 
+    public static volatile boolean enabled = true;
+
     private MemoryChecker() {
     }
 
     public static final void checkMemory() {
+        if (!enabled) {
+            return;
+        }
         if (!Thread.currentThread().isInterrupted()) {
             final long freeMem = Runtime.getRuntime().freeMemory();
             if (freeMem <= MEMORY_THRESHOLD) {

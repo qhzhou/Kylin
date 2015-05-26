@@ -56,6 +56,7 @@ import org.apache.kylin.metadata.model.MeasureDesc;
 import org.apache.kylin.metadata.model.TblColRef;
 import org.apache.kylin.storage.cube.CubeGridTable;
 import org.apache.kylin.storage.gridtable.*;
+import org.apache.kylin.storage.gridtable.diskstore.GTDiskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,6 +87,10 @@ public class InMemCubeBuilder implements Runnable {
     private int measureCount;
 
     protected IGTRecordWriter gtRecordWriter;
+
+    private static final int RESULT_OK = 0;
+    private static final int RESULT_TIMEOUT = -1;
+    private static final int RESULT_OUT_OF_MEMORY = -2;
 
 
     /**
@@ -425,7 +430,8 @@ public class InMemCubeBuilder implements Runnable {
 
     }
 
-    private GridTable createChildCuboid(final GridTable parentCuboid, final long parentCuboidId, final long cuboidId) {
+    private Pair<Integer, GridTable> createChildCuboid(final GridTable parentCuboid, final long parentCuboidId, final long cuboidId, long timeoutInSeconds) {
+        logger.info("Calculating cuboid " + cuboidId + " from parent " + parentCuboidId + " timeout: " + timeoutInSeconds + "seconds");
         final ExecutorService executorService = Executors.newSingleThreadExecutor();
         final Future<GridTable> task = executorService.submit(new Callable<GridTable>() {
             @Override
@@ -434,29 +440,32 @@ public class InMemCubeBuilder implements Runnable {
             }
         });
         try {
-            final GridTable gridTable = task.get(DEFAULT_TIMEOUT, TimeUnit.SECONDS);
-            return gridTable;
+            return new Pair<>(RESULT_OK, task.get(timeoutInSeconds, TimeUnit.SECONDS));
         } catch (InterruptedException e) {
-            throw new RuntimeException("this should not happen", e);
+            throw new RuntimeException("no one will interrupt this thread, this should not happen", e);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof OutOfMemoryError) {
                 logger.warn("Future.get() OutOfMemory, stop the thread");
+                return new Pair<>(RESULT_OUT_OF_MEMORY, null);
             } else {
-                throw new RuntimeException("this should not happen", e);
+                logger.error("execution exception occurs", e);
+                throw new RuntimeException(e);
             }
         } catch (TimeoutException e) {
             logger.warn("Future.get() timeout, stop the thread");
+            return new Pair<>(RESULT_TIMEOUT, null);
+        } finally {
+            shutdownExecutorService(executorService);
         }
-        logger.info("shutdown executor service");
+    }
+
+    private void shutdownExecutorService(ExecutorService executorService) {
         final List<Runnable> runnables = executorService.shutdownNow();
         try {
             executorService.awaitTermination(DEFAULT_TIMEOUT, TimeUnit.SECONDS);
-            waitForGc();
         } catch (InterruptedException e) {
-            throw new RuntimeException("this should not happen", e);
+            throw new RuntimeException("no one will interrupt this thread, this should not happen", e);
         }
-        return null;
-
     }
 
     private void waitForGc() {
@@ -472,30 +481,47 @@ public class InMemCubeBuilder implements Runnable {
     private void createNDCuboidGT(SimpleGridTableTree parentNode, long parentCuboidId, long cuboidId) throws IOException {
 
         long startTime = System.currentTimeMillis();
-
-//        GTComboStore parentStore = (GTComboStore) parentNode.data.getStore();
-//        if (parentStore.memoryUsage() <= 0) {
-//            long t = System.currentTimeMillis();
-//            parentStore.switchToMemStore();
-//            logger.info("node " + parentNode.id + " switch to mem store cost:" + (System.currentTimeMillis() - t) + "ms");
-//        }
-
-        GridTable currentCuboid;
-        while (true) {
-            logger.info("Calculating cuboid " + cuboidId + " from parent " + parentCuboidId);
-            currentCuboid = createChildCuboid(parentNode.data, parentCuboidId, cuboidId);
-            if (currentCuboid != null) {
-                break;
-            } else {
-                logger.warn("create child cuboid:" + cuboidId + " from parent:" + parentCuboidId + " failed, prepare to gc");
-                if (gc(parentNode)) {
-                    continue;
+        GridTable currentCuboid = null;
+        int retryTimes = 3;
+        int timeout = ((GTComboStore) parentNode.data.getStore()).memoryUsage() > 0 ? DEFAULT_TIMEOUT:DEFAULT_TIMEOUT*2;
+        Pair<Integer, GridTable> result = createChildCuboid(parentNode.data, parentCuboidId, cuboidId, timeout);
+        try {
+            do {
+                final int resultCode = result.getFirst();
+                if (resultCode == 0) {
+                    currentCuboid = result.getSecond();
+                    break;
                 } else {
-                    logger.warn("all parent node has been flushed into disk, memory is still insufficient");
-                    throw new RuntimeException("all parent node has been flushed into disk, memory is still insufficient");
+                    logger.warn("create child cuboid:" + cuboidId + " from parent:" + parentCuboidId + " failed, result code:" + resultCode);
+                    if (resultCode == RESULT_OUT_OF_MEMORY) {
+                        if (gc(parentNode)) {
+                        } else {
+                            logger.warn("all parent node has been flushed into disk, memory is still insufficient, usually due to Runtime.freeMemory() is not accurate, just wait for gc");
+                            waitForGc();
+                        }
+                        MemoryChecker.enabled = false;
+                        result = createChildCuboid(parentNode.data, parentCuboidId, cuboidId, timeout);
+                        continue;
+                    } else if (resultCode == RESULT_TIMEOUT) {
+                        logger.info("increase timeout threshold, and gc");
+                        timeout += DEFAULT_TIMEOUT;
+                        gc(parentNode);
+                        result = createChildCuboid(parentNode.data, parentCuboidId, cuboidId, timeout);
+                        continue;
+                    } else {
+                        throw new RuntimeException("invalid result code:" + resultCode);
+                    }
                 }
-            }
+            } while (--retryTimes > 0);
+        } finally {
+            MemoryChecker.enabled = true;
         }
+
+        if (currentCuboid == null) {
+            logger.error("unable to create child cuboid:" + cuboidId + " from parent:" + parentCuboidId);
+            throw new RuntimeException("unable to create child cuboid:" + cuboidId + " from parent:" + parentCuboidId);
+        }
+
         SimpleGridTableTree node = new SimpleGridTableTree();
         node.parent = parentNode;
         node.data = currentCuboid;
