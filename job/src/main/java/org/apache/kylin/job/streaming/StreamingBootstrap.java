@@ -111,11 +111,15 @@ public class StreamingBootstrap {
         return result;
     }
 
-    public void start(String streaming, int partitionId, BootstrapConfig bootstrapConfig) throws Exception {
+    public void start(BootstrapConfig bootstrapConfig) throws Exception {
+        final String streaming = bootstrapConfig.getStreaming();
+        Preconditions.checkNotNull(streaming, "streaming name cannot be empty");
         final StreamingConfig streamingConfig = streamingManager.getStreamingConfig(streaming);
         Preconditions.checkArgument(streamingConfig != null, "cannot find kafka config:" + streaming);
 
         if (!StringUtils.isEmpty(streamingConfig.getIiName())) {
+            int partitionId = bootstrapConfig.getPartitionId();
+            Preconditions.checkArgument(partitionId >= 0, "partitionId cannot be empty for inverted index streaming");
             startIIStreaming(streamingConfig, partitionId);
         } else if (!StringUtils.isEmpty(streamingConfig.getCubeName())) {
             if (bootstrapConfig.isOneOff()) {
@@ -123,7 +127,7 @@ public class StreamingBootstrap {
                 Preconditions.checkArgument(bootstrapConfig.getEnd() != 0);
                 startOneOffCubeStreaming(streamingConfig, bootstrapConfig.getStart(), bootstrapConfig.getEnd());
             } else {
-                startCubeStreaming(streamingConfig, partitionId);
+                startCubeStreaming(streamingConfig);
             }
         } else {
             throw new IllegalArgumentException("no cube or ii in kafka config");
@@ -131,7 +135,10 @@ public class StreamingBootstrap {
     }
 
     public void start(String streaming, int partitionId) throws Exception {
-        start(streaming, partitionId, new BootstrapConfig());
+        final BootstrapConfig bootstrapConfig = new BootstrapConfig();
+        bootstrapConfig.setPartitionId(partitionId);
+        bootstrapConfig.setStreaming(streaming);
+        start(bootstrapConfig);
     }
 
     private List<BlockingQueue<StreamMessage>> consume(final int clusterID, final KafkaClusterConfig kafkaClusterConfig, final int partitionCount, final Map<Integer, Long> partitionIdOffsetMap, final int partitionIdOffset) {
@@ -168,7 +175,7 @@ public class StreamingBootstrap {
         return result;
     }
 
-    private void startCubeStreaming(StreamingConfig streamingConfig, final int partitionId) throws Exception {
+    private void startCubeStreaming(StreamingConfig streamingConfig) throws Exception {
         List<KafkaClusterConfig> kafkaClusterConfigs = streamingConfig.getKafkaClusterConfigs();
 
         final List<BlockingQueue<StreamMessage>> allClustersData = Lists.newArrayList();
@@ -188,7 +195,6 @@ public class StreamingBootstrap {
         partitionIdOffset = 0;
         for (KafkaClusterConfig kafkaClusterConfig : kafkaClusterConfigs) {
             final int partitionCount = KafkaRequester.getKafkaTopicMeta(kafkaClusterConfig).getPartitionIds().size();
-            Preconditions.checkArgument(partitionId >= 0 && partitionId < partitionCount, "invalid partition id:" + partitionId);
 
             final List<BlockingQueue<StreamMessage>> oneClusterData = consume(clusterID, kafkaClusterConfig, partitionCount, partitionIdOffsetMap, partitionIdOffset);
             logger.info("Cluster {} with {} partitions", allClustersData.size(), oneClusterData.size());
