@@ -10,6 +10,15 @@ public class BootstrapConfig {
     private boolean oneOff = false;
     private long start = 0L;
     private long end = 0L;
+    private long margin = 0L;
+
+    public long getMargin() {
+        return margin;
+    }
+
+    public void setMargin(long margin) {
+        this.margin = margin;
+    }
 
     public boolean isOneOff() {
         return oneOff;

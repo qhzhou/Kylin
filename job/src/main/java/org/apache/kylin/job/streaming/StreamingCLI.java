@@ -75,6 +75,9 @@ public class StreamingCLI {
                     case "-partition":
                         bootstrapConfig.setPartitionId(Integer.parseInt(args[++i]));
                         break;
+                    case "-margin":
+                        bootstrapConfig.setMargin(Long.parseLong(args[++i]));
+                        break;
                     default:
                         logger.warn("ignore this arg:" + argName);
                 }
