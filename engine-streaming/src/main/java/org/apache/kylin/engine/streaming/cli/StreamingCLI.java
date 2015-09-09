@@ -32,15 +32,23 @@
  * /
  */
 
-package org.apache.kylin.engine.streaming;
+package org.apache.kylin.engine.streaming.cli;
 
+import com.google.common.base.Preconditions;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.cache.RemoteCacheUpdater;
 import org.apache.kylin.common.restclient.AbstractRestCache;
+import org.apache.kylin.common.util.Pair;
+import org.apache.kylin.engine.streaming.BootstrapConfig;
+import org.apache.kylin.engine.streaming.OneOffStreamingBuilder;
+import org.apache.kylin.engine.streaming.StreamingConfig;
+import org.apache.kylin.engine.streaming.StreamingManager;
+import org.apache.kylin.engine.streaming.monitor.StreamingMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Preconditions;
+import java.util.List;
 
 public class StreamingCLI {
 
@@ -59,7 +67,7 @@ public class StreamingCLI {
                 String argName = args[i];
                 switch (argName) {
                 case "-oneoff":
-                    bootstrapConfig.setOneOff(Boolean.parseBoolean(args[++i]));
+                    Boolean.parseBoolean(args[++i]);
                     break;
                 case "-start":
                     bootstrapConfig.setStart(Long.parseLong(args[++i]));
@@ -81,15 +89,28 @@ public class StreamingCLI {
                 }
                 i++;
             }
-            final Runnable runnable = new OneOffStreamingBuilder(bootstrapConfig.getStreaming(), bootstrapConfig.getStart(), bootstrapConfig.getEnd()).build();
-            runnable.run();
-            logger.info("streaming process stop, exit with 0");
-            System.exit(0);
+            if (bootstrapConfig.isFillGap()) {
+                final StreamingConfig streamingConfig = StreamingManager.getInstance(KylinConfig.getInstanceFromEnv()).getStreamingConfig(bootstrapConfig.getStreaming());
+                final List<Pair<Long, Long>> gaps = StreamingMonitor.findGaps(streamingConfig.getCubeName());
+                logger.info("all gaps:" + StringUtils.join(gaps, ","));
+                for (Pair<Long, Long> gap : gaps) {
+                    startOneOffCubeStreaming(bootstrapConfig.getStreaming(), gap.getFirst(), gap.getSecond());
+                }
+            } else {
+                startOneOffCubeStreaming(bootstrapConfig.getStreaming(), bootstrapConfig.getStart(), bootstrapConfig.getEnd());
+                logger.info("streaming process finished, exit with 0");
+                System.exit(0);
+            }
         } catch (Exception e) {
             printArgsError(args);
             logger.error("error start streaming", e);
             System.exit(-1);
         }
+    }
+    
+    private static void startOneOffCubeStreaming(String streaming, long start, long end) {
+        final Runnable runnable = new OneOffStreamingBuilder(streaming, start, end).build();
+        runnable.run();
     }
 
     private static void printArgsError(String[] args) {

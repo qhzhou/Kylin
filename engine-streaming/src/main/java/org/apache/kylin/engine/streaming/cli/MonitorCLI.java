@@ -1,8 +1,9 @@
-package org.apache.kylin.job.monitor;
+package org.apache.kylin.engine.streaming.cli;
 
 import java.util.List;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.kylin.engine.streaming.monitor.StreamingMonitor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

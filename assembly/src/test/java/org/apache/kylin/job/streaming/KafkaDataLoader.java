@@ -10,22 +10,21 @@ import kafka.producer.KeyedMessage;
 import kafka.producer.ProducerConfig;
 
 import org.apache.commons.lang.StringUtils;
-import org.apache.kylin.streaming.BrokerConfig;
-import org.apache.kylin.streaming.KafkaClusterConfig;
-import org.apache.kylin.streaming.StreamingConfig;
 
 import com.google.common.base.Function;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.Lists;
+import org.apache.kylin.source.kafka.config.BrokerConfig;
+import org.apache.kylin.source.kafka.config.KafkaClusterConfig;
 
 /**
  * Load prepared data into kafka(for test use)
  */
 public class KafkaDataLoader {
 
-    public static void loadIntoKafka(StreamingConfig streamingConfig, List<String> messages) {
+    public static void loadIntoKafka(List<KafkaClusterConfig> kafkaClusterConfigs, List<String> messages) {
 
-        KafkaClusterConfig clusterConfig = streamingConfig.getKafkaClusterConfigs().get(0);
+        KafkaClusterConfig clusterConfig = kafkaClusterConfigs.get(0);
         String brokerList = StringUtils.join(Collections2.transform(clusterConfig.getBrokerConfigs(), new Function<BrokerConfig, String>() {
             @Nullable
             @Override
@@ -44,7 +43,7 @@ public class KafkaDataLoader {
 
         List<KeyedMessage<String, String>> keyedMessages = Lists.newArrayList();
         for (int i = 0; i < messages.size(); ++i) {
-            KeyedMessage<String, String> keyedMessage = new KeyedMessage<String, String>(streamingConfig.getTopic(), String.valueOf(i), messages.get(i));
+            KeyedMessage<String, String> keyedMessage = new KeyedMessage<String, String>(clusterConfig.getTopic(), String.valueOf(i), messages.get(i));
             keyedMessages.add(keyedMessage);
         }
         producer.send(keyedMessages);

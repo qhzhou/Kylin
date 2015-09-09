@@ -1,4 +1,4 @@
-package org.apache.kylin.job.monitor;
+package org.apache.kylin.engine.streaming.monitor;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
